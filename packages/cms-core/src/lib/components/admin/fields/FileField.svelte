@@ -48,8 +48,9 @@
 		fieldPath,
 		readonly = false,
 		compact = false,
-		arrayItem = false,
-		organizationId
+		arrayItem = false
+		// `organizationId` stays in Props for callers, but uploads no longer consume
+		// it: `assets.uploadFile` scopes the asset to the session's active org.
 	}: Props = $props();
 
 	// Read-only when forced by caller OR the user lacks asset.upload. Keeps
@@ -74,22 +75,15 @@
 		uploadError = null;
 
 		try {
-			const formData = new FormData();
-			formData.append('file', file);
-
-			if (organizationId) formData.append('organizationId', organizationId);
-			if (schemaType) formData.append('schemaType', schemaType);
-			if (fieldPath) formData.append('fieldPath', fieldPath);
-
-			// Pass allowed MIME types for server-side validation
-			if (acceptedFileTypes.length > 0) {
-				formData.append('allowedMimeTypes', JSON.stringify(acceptedFileTypes));
-			}
-			if (field.maxSize) {
-				formData.append('maxSize', String(field.maxSize));
-			}
-
-			const result = await assets.upload(formData);
+			// Fork (mono-aphex): direct-first upload via the client helper, see the
+			// note in ImageField. `field.maxSize` narrows proxied uploads only; the
+			// direct path is bounded by `upload.maxFileSize` server-side.
+			const result = await assets.uploadFile(file, {
+				direct: true,
+				schemaType,
+				fieldPath,
+				...(acceptedFileTypes.length > 0 ? { allowedMimeTypes: acceptedFileTypes } : {})
+			});
 
 			if (!result.success) {
 				throw new Error(result.error || 'Upload failed');

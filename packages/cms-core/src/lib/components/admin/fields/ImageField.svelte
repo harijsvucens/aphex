@@ -51,8 +51,9 @@
 		fieldPath,
 		readonly = false,
 		compact = false,
-		arrayItem = false,
-		organizationId
+		arrayItem = false
+		// `organizationId` stays in Props for callers, but uploads no longer consume
+		// it: `assets.uploadFile` scopes the asset to the session's active org.
 	}: Props = $props();
 
 	// Treat the field as read-only when the explicit prop is set OR the user
@@ -81,18 +82,16 @@
 		uploadError = null;
 
 		try {
-			const formData = new FormData();
-			formData.append('file', file);
-
-			// Add document's organization ID so asset belongs to document's org
-			if (organizationId) formData.append('organizationId', organizationId);
-
-			// Add field metadata for privacy checking
-			if (schemaType) formData.append('schemaType', schemaType);
-			if (fieldPath) formData.append('fieldPath', fieldPath);
-			formData.append('allowedMimeTypes', JSON.stringify(acceptedFileTypes));
-
-			const result = await assets.upload(formData);
+			// Fork (mono-aphex): go through the same client call the media browser
+			// uses. It PUTs straight to storage when direct uploads are available and
+			// falls back to the multipart proxy on 404; the raw multipart call could
+			// never carry a file past the serverless request cap (4.5MB on Vercel).
+			const result = await assets.uploadFile(file, {
+				direct: true,
+				schemaType,
+				fieldPath,
+				allowedMimeTypes: acceptedFileTypes
+			});
 
 			if (!result.success) {
 				throw new Error(result.error || 'Upload failed');

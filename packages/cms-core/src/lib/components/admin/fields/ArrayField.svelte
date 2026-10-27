@@ -339,11 +339,9 @@
 
 	async function uploadImageFile(file: File): Promise<ImageValue | null> {
 		try {
-			const formData = new FormData();
-			formData.append('file', file);
-			if (organizationId) formData.append('organizationId', organizationId);
-
-			const result = await assets.upload(formData);
+			// Fork (mono-aphex): direct-first upload via the client helper, see
+			// the note in ImageField.
+			const result = await assets.uploadFile(file, { direct: true });
 			if (!result.success) throw new Error(result.error || 'Upload failed');
 
 			return {
