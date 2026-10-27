@@ -1,6 +1,11 @@
 // Assets API client - manage uploaded files and images
 import { apiClient, ApiError } from './client';
-import { putToStorage, uploadFormData, type UploadOptions } from './upload';
+import {
+	sendToStorage,
+	uploadFormData,
+	type StorageUploadTarget,
+	type UploadOptions
+} from './upload';
 import { uploadTimeoutFor, uploadTimeoutForBytes } from './upload-timeout';
 import type { ApiResponse } from './types';
 import type { Asset } from '../types/asset';
@@ -118,10 +123,12 @@ export class AssetsApi {
 	}
 
 	/**
-	 * Three-step direct upload: get a signed URL, PUT to storage, confirm.
+	 * Three-step direct upload: get a grant, redeem it at the storage provider,
+	 * confirm.
 	 *
-	 * Progress covers only the PUT — it is the whole transfer, and reporting the
-	 * two bookkeeping calls would just make the bar jump.
+	 * The grant is either a signed PUT (S3, R2) or a signed multipart POST
+	 * (Cloudinary), and {@link sendToStorage} hides which. Progress covers only
+	 * the transfer — the two bookkeeping calls would just make the bar jump.
 	 */
 	private static async uploadDirect(
 		file: File,
@@ -132,7 +139,9 @@ export class AssetsApi {
 			await apiClient.post<{
 				assetId: string;
 				uploadUrl: string;
-				headers: Record<string, string>;
+				method?: 'PUT' | 'POST';
+				headers?: Record<string, string>;
+				fields?: Record<string, string>;
 				ticket: string;
 			}>('/assets/upload-url', {
 				filename: file.name,
@@ -144,7 +153,14 @@ export class AssetsApi {
 
 		if (!grant) throw new ApiError(500, null, 'Malformed upload grant');
 
-		await putToStorage(grant.uploadUrl, file, grant.headers, {
+		const target: StorageUploadTarget = {
+			url: grant.uploadUrl,
+			method: grant.method,
+			headers: grant.headers,
+			fields: grant.fields
+		};
+
+		await sendToStorage(target, file, {
 			...options,
 			timeoutMs: options.timeoutMs ?? uploadTimeoutForBytes(file.size)
 		});

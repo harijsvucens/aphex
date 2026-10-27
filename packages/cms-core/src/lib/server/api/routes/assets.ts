@@ -174,7 +174,8 @@ export const assetsRouter: Hono<AphexEnv> = new Hono<AphexEnv>()
 						// of the upload configuration is absent.
 						directUpload: Boolean(
 							c.var.aphexCMS.config?.upload?.direct &&
-							c.var.aphexCMS.storageAdapter?.getSignedUploadUrl &&
+							(c.var.aphexCMS.storageAdapter?.getDirectUpload ||
+								c.var.aphexCMS.storageAdapter?.getSignedUploadUrl) &&
 							c.var.aphexCMS.storageAdapter?.resolvePath &&
 							c.var.aphexCMS.storageAdapter?.copyObject &&
 							c.var.aphexCMS.config?.security?.secretEncryptionKey

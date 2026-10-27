@@ -22,30 +22,32 @@ export interface UploadOptions {
 }
 
 /**
- * POST a FormData body with progress reporting.
+ * A direct-to-storage write the server has already authorized.
  *
- * Resolves with the parsed body on success and rejects with `ApiError`
- * otherwise, matching `ApiClient` exactly.
+ * Mirrors `DirectUploadGrant` from the storage interface without importing it:
+ * this module runs in the browser and the interface barrel carries server types.
  */
+export interface StorageUploadTarget {
+	url: string;
+	method?: 'PUT' | 'POST';
+	headers?: Record<string, string>;
+	fields?: Record<string, string>;
+}
+
 /**
- * PUT a file straight to object storage, reporting progress.
+ * XHR plumbing shared by the PUT (raw body) and POST (multipart) grants.
  *
- * Distinct from {@link uploadFormData} in two ways that matter:
- *
- * - **No credentials.** The target is a third-party origin and the URL already
- *   carries its own signature. Sending cookies would leak the session to the
- *   storage provider and trip CORS besides.
- * - **Raw body, not FormData.** The signature covers the object bytes; wrapping
- *   them in multipart framing would store the framing.
- *
- * A failure here is very often missing bucket CORS rather than a broken file,
- * and the browser deliberately hides the distinction — so the error says so.
+ * `failureHint` is what the caller sees when the browser reports a bare network
+ * error: cross-origin failures are deliberately opaque, so naming the likely
+ * cause is the only way an operator finds a missing CORS rule.
  */
-export function putToStorage(
+function sendXhr(
+	method: 'PUT' | 'POST',
 	url: string,
-	file: File | Blob,
-	headers: Record<string, string> = {},
-	options: UploadOptions = {}
+	body: File | Blob | FormData,
+	headers: Record<string, string>,
+	options: UploadOptions,
+	failureHint: string
 ): Promise<void> {
 	const { onProgress, signal, timeoutMs } = options;
 
@@ -56,7 +58,7 @@ export function putToStorage(
 		}
 
 		const xhr = new XMLHttpRequest();
-		xhr.open('PUT', url, true);
+		xhr.open(method, url, true);
 		xhr.withCredentials = false;
 		for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
 		if (timeoutMs) xhr.timeout = timeoutMs;
@@ -79,22 +81,26 @@ export function putToStorage(
 				resolve();
 				return;
 			}
-			reject(new ApiError(xhr.status, null, `Storage rejected the upload (${xhr.status})`));
+			// Providers explain refusals in the body (Cloudinary:
+			// `{"error":{"message":"Invalid Signature ..."}}`). A bare status turns
+			// a one-line fix into a debugging session, so surface it when present.
+			let detail = `Storage rejected the upload (${xhr.status})`;
+			try {
+				const parsed = JSON.parse(xhr.responseText) as {
+					error?: { message?: string } | string;
+					message?: string;
+				};
+				const fromError = typeof parsed.error === 'string' ? parsed.error : parsed.error?.message;
+				detail = fromError || parsed.message || detail;
+			} catch {
+				// Non-JSON error page; keep the status.
+			}
+			reject(new ApiError(xhr.status, null, detail));
 		});
 
 		xhr.addEventListener('error', () => {
 			cleanup();
-			// A cross-origin PUT blocked by CORS surfaces here as a bare network
-			// error with no detail, by design. Naming the likely cause is the only
-			// way an operator finds it, since the browser console message is the
-			// only other clue and nobody reads it from a toast.
-			reject(
-				new ApiError(
-					0,
-					null,
-					'Could not reach storage. The bucket may not allow PUT from this origin (CORS).'
-				)
-			);
+			reject(new ApiError(0, null, failureHint));
 		});
 
 		xhr.addEventListener('timeout', () => {
@@ -107,8 +113,56 @@ export function putToStorage(
 			reject(new ApiError(0, null, 'Upload cancelled'));
 		});
 
-		xhr.send(file);
+		xhr.send(body);
 	});
+}
+
+const PUT_FAILURE =
+	'Could not reach storage. The bucket may not allow PUT from this origin (CORS).';
+const POST_FAILURE =
+	'Could not reach the upload service. It may not allow POST from this origin (CORS).';
+
+/**
+ * PUT a file straight to object storage, reporting progress.
+ *
+ * Distinct from {@link uploadFormData} in two ways that matter:
+ *
+ * - **No credentials.** The target is a third-party origin and the URL already
+ *   carries its own signature. Sending cookies would leak the session to the
+ *   storage provider and trip CORS besides.
+ * - **Raw body, not FormData.** The signature covers the object bytes; wrapping
+ *   them in multipart framing would store the framing.
+ */
+export function putToStorage(
+	url: string,
+	file: File | Blob,
+	headers: Record<string, string> = {},
+	options: UploadOptions = {}
+): Promise<void> {
+	return sendXhr('PUT', url, file, headers, options, PUT_FAILURE);
+}
+
+/**
+ * Redeem a direct-upload grant, in whichever shape the adapter issued.
+ *
+ * A POST grant becomes a multipart body: the signed fields first, then the file
+ * under `file` — the part name every provider's upload API expects. No
+ * Content-Type header is set, because the browser must add the multipart
+ * boundary itself.
+ */
+export function sendToStorage(
+	target: StorageUploadTarget,
+	file: File | Blob,
+	options: UploadOptions = {}
+): Promise<void> {
+	const method = target.method ?? 'PUT';
+	if (method === 'POST') {
+		const form = new FormData();
+		for (const [name, value] of Object.entries(target.fields ?? {})) form.append(name, value);
+		form.append('file', file, file instanceof File ? file.name : 'upload');
+		return sendXhr('POST', target.url, form, target.headers ?? {}, options, POST_FAILURE);
+	}
+	return sendXhr('PUT', target.url, file, target.headers ?? {}, options, PUT_FAILURE);
 }
 
 export function uploadFormData<T>(

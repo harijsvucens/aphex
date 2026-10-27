@@ -81,17 +81,14 @@ export const assetsDirectUploadRouter: Hono<AphexEnv> = new Hono<AphexEnv>()
 					);
 				}
 
-				// Unavailable rather than broken: an adapter that can't sign, or an
-				// app with no encryption key, simply doesn't offer this path, and the
-				// client falls back to uploading through the app. 404 keeps it from
-				// looking like a transient failure worth retrying.
+				// Unavailable rather than broken: an adapter that can't issue a write
+				// grant, or an app with no encryption key, simply doesn't offer this
+				// path, and the client falls back to uploading through the app. 404
+				// keeps it from looking like a transient failure worth retrying.
 				const secret = config.security?.secretEncryptionKey;
-				if (
-					!storageAdapter?.getSignedUploadUrl ||
-					!storageAdapter.resolvePath ||
-					!storageAdapter.copyObject ||
-					!secret
-				) {
+				const storage = storageAdapter;
+				const canGrant = Boolean(storage?.getDirectUpload || storage?.getSignedUploadUrl);
+				if (!storage?.resolvePath || !storage.copyObject || !canGrant || !secret) {
 					return c.json({ success: false, error: 'Direct upload is not available' }, 404);
 				}
 
@@ -138,13 +135,21 @@ export const assetsDirectUploadRouter: Hono<AphexEnv> = new Hono<AphexEnv>()
 				const assetId = crypto.randomUUID();
 				const finalKey = buildOriginalKey(assetId, filename, mimeType);
 				const key = `${assetId}/pending-${crypto.randomUUID()}.${extensionFor(filename, mimeType)}`;
-				const path = storageAdapter.resolvePath(key);
+				const path = storage.resolvePath(key);
 
-				const uploadUrl = await storageAdapter.getSignedUploadUrl(
-					path,
-					UPLOAD_URL_TTL_SECONDS,
-					mimeType
-				);
+				// Preferred shape first: providers that need a signed multipart POST
+				// (Cloudinary) can't express their grant as a URL. Adapters that sign a
+				// PUT keep working unchanged.
+				const uploadGrant = storage.getDirectUpload
+					? await storage.getDirectUpload(path, {
+							expiresIn: UPLOAD_URL_TTL_SECONDS,
+							contentType: mimeType
+						})
+					: {
+							url: await storage.getSignedUploadUrl!(path, UPLOAD_URL_TTL_SECONDS, mimeType),
+							method: 'PUT' as const,
+							headers: { 'Content-Type': mimeType }
+						};
 
 				const ticket: UploadTicket = {
 					assetId,
@@ -162,10 +167,10 @@ export const assetsDirectUploadRouter: Hono<AphexEnv> = new Hono<AphexEnv>()
 					success: true,
 					data: {
 						assetId,
-						uploadUrl,
-						// The browser must send the same Content-Type the URL was signed
-						// with, or the storage service rejects the PUT.
-						headers: { 'Content-Type': mimeType },
+						uploadUrl: uploadGrant.url,
+						method: uploadGrant.method ?? 'PUT',
+						headers: uploadGrant.headers ?? {},
+						fields: uploadGrant.fields,
 						ticket: encryptSecret(JSON.stringify(ticket), secret)
 					}
 				});

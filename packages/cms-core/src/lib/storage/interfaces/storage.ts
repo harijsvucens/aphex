@@ -37,6 +37,27 @@ export interface UploadFileData {
 	key?: string;
 }
 
+/**
+ * A write grant the browser can redeem without the app in the middle.
+ *
+ * `getSignedUploadUrl` modelled this as "a URL you PUT bytes to", which is what
+ * S3 and R2 accept and nothing else does. Cloudinary, for one, takes a signed
+ * **multipart POST** with the signature in the form body, so an adapter that
+ * can only hand back a URL cannot support direct uploads at all — and on a
+ * serverless host that means every photo is refused at the 4.5 MB request cap.
+ *
+ * `fields` are form parts to send alongside the file. When present the client
+ * POSTs `multipart/form-data` with `file` plus these parts; when absent it PUTs
+ * the raw bytes, exactly as before. `headers` are only applied to the PUT form,
+ * because a multipart body's Content-Type must carry the browser's boundary.
+ */
+export interface DirectUploadGrant {
+	url: string;
+	method?: 'PUT' | 'POST';
+	headers?: Record<string, string>;
+	fields?: Record<string, string>;
+}
+
 export interface StorageConfig {
 	basePath: string;
 	baseUrl?: string;
@@ -232,6 +253,18 @@ export interface StorageAdapter {
 	 * @param contentType - Binds the URL to a Content-Type when supported
 	 */
 	getSignedUploadUrl?(path: string, expiresIn?: number, contentType?: string): Promise<string>;
+
+	/**
+	 * Generate a grant for providers whose direct-upload API is not a signed PUT.
+	 *
+	 * Preferred over {@link getSignedUploadUrl} when both exist. Callers must
+	 * still fall back to the proxied upload when neither is implemented; that
+	 * path works everywhere, just with the platform's request-body ceiling.
+	 */
+	getDirectUpload?(
+		path: string,
+		opts?: { expiresIn?: number; contentType?: string }
+	): Promise<DirectUploadGrant>;
 
 	/**
 	 * Convert an adapter-relative key into this adapter's own path.

@@ -16,6 +16,7 @@ import { cmsLogger, setLogLevel, setLogger } from './utils/logger';
 import { createStorageAdapter as createStorageAdapterProvider } from './storage/providers/storage';
 import { AssetService as AssetServiceClass } from './services/asset-service';
 import { resolveImageConfig } from './images/variants';
+import { resolveFieldPrivacy } from './utils/asset-privacy';
 import { resolveGlobalAllowedMimeTypes } from './utils/file-accept';
 import { RolesService } from './services/roles-service';
 import { PluginSettingsService } from './services/plugin-settings-service';
@@ -164,13 +165,21 @@ export function createCMSHook(config: CMSConfig): Handle {
 			const storageAdapter = currentConfig.storage ?? createDefaultStorageAdapter();
 			const emailAdapter = currentConfig.email ?? null;
 			const aiProvider = currentConfig.aiProvider ?? null;
+			// The engine comes first now: injection decides whether an asset's
+			// field is private by asking the live schema, and the asset service is
+			// constructed with that lookup.
+			const cmsEngine = createCMS(currentConfig, databaseAdapter);
 			const assetService = new AssetServiceClass(
 				storageAdapter,
 				databaseAdapter,
 				resolveImageConfig(currentConfig.images),
-				resolveGlobalAllowedMimeTypes({ config: currentConfig })
+				resolveGlobalAllowedMimeTypes({ config: currentConfig }),
+				(schemaType, fieldPath) =>
+					resolveFieldPrivacy(
+						schemaType ? cmsEngine.getSchemaTypeByName(schemaType) : null,
+						fieldPath
+					)
 			);
-			const cmsEngine = createCMS(currentConfig, databaseAdapter);
 			const rolesService = new RolesService(databaseAdapter, currentConfig.cache ?? null);
 
 			// Initialize Local API (unified operations layer)

@@ -12,10 +12,13 @@ import {
 	canGenerateVariants,
 	configHashFor,
 	getVariants,
-	type ImageConfig
+	usableWidths,
+	type ImageConfig,
+	type ImageDeliveryProvider
 } from '../images/variants';
 import { DEFAULT_ALLOWED_MIME_TYPES, isAcceptedFileType } from '../utils/file-accept';
 import { validateFile } from '../utils/mime-detect';
+import { isAssetPrivate } from '../utils/asset-privacy';
 
 /**
  * Maximum asset ids per `IN (...)` when resolving refs for injection.
@@ -110,7 +113,18 @@ export class AssetService {
 		private storage: StorageAdapter,
 		private database: DatabaseAdapter,
 		private images: ImageConfig | null = null,
-		private allowedMimeTypes: readonly string[] = DEFAULT_ALLOWED_MIME_TYPES
+		private allowedMimeTypes: readonly string[] = DEFAULT_ALLOWED_MIME_TYPES,
+		/**
+		 * Live schema lookup for field privacy, supplied by the caller that owns
+		 * the engine. Injection writes URLs into documents, so it must know
+		 * whether an asset sits behind a `private: true` field *now* — the value
+		 * stamped at upload can be stale after a field flips — and the answer
+		 * decides whether an external provider URL may be emitted at all.
+		 */
+		private resolvePrivacy?: (
+			schemaType: string | undefined,
+			fieldPath: string | undefined
+		) => boolean | null
 	) {}
 
 	/**
@@ -479,7 +493,7 @@ export class AssetService {
 					for (const asset of result.docs) {
 						if (!asset.url) continue;
 						resolved.set(asset.id, {
-							url: asset.url,
+							url: this.deliveryUrl(asset),
 							alt: asset.alt ?? undefined,
 							width: asset.width ?? undefined,
 							height: asset.height ?? undefined,
@@ -501,12 +515,63 @@ export class AssetService {
 	}
 
 	/**
+	 * The provider that may address this asset, or null for the built-in route.
+	 *
+	 * Three exclusions, each load-bearing:
+	 * - no provider configured (the common case);
+	 * - the asset can't have a derivative (SVG, animated, HEIC — see
+	 *   {@link canGenerateVariants}), so there is nothing to transform;
+	 * - the field is private. `/media` is the only delivery path that enforces
+	 *   the app's access checks, and a provider URL bypasses it entirely.
+	 */
+	private providerFor(asset: Asset): ImageDeliveryProvider | null {
+		if (!this.images?.provider) return null;
+		// A provider addresses objects in the storage its deployment is configured
+		// for. A row recorded by a different adapter (mid-migration, or after a
+		// rollback) has a path the provider cannot resolve, so addressing it would
+		// emit a confidently wrong URL instead of the /media one that at least
+		// fails visibly.
+		if (asset.storageAdapter !== this.storage.name) return null;
+		if (!canGenerateVariants(asset)) return null;
+		if (this.isPrivateAsset(asset)) return null;
+		return this.images.provider;
+	}
+
+	private isPrivateAsset(asset: Asset): boolean {
+		const resolved =
+			this.resolvePrivacy?.(asset.metadata?.schemaType, asset.metadata?.fieldPath) ?? null;
+		return isAssetPrivate(resolved, asset.metadata?.private).isPrivate;
+	}
+
+	/**
+	 * The URL a rendered document should carry for this asset.
+	 *
+	 * A provider URL when one applies, otherwise the stored `/media` URL. The
+	 * provider is asked for the largest usable rung rather than the original so
+	 * `src` is still an optimized file; a browser without `srcset` is rare, but
+	 * the fallback is what social crawlers and email clients read.
+	 */
+	private deliveryUrl(asset: Asset): string {
+		const provider = this.providerFor(asset);
+		if (provider && this.images) {
+			const url = provider.url(asset, usableWidths(this.images, asset.width ?? null));
+			if (url) return url;
+		}
+		return asset.url;
+	}
+
+	/**
 	 * Responsive `srcset` for an image, or undefined when there's nothing to offer.
 	 *
 	 * Non-images and SVGs are excluded: an SVG is already resolution-independent,
 	 * and rasterising one to a fixed ladder makes it strictly worse.
 	 */
 	private buildSrcsetFor(asset: Asset): string | undefined {
+		const provider = this.providerFor(asset);
+		if (provider && this.images) {
+			const srcset = provider.srcset(asset, usableWidths(this.images, asset.width ?? null));
+			if (srcset) return srcset;
+		}
 		if (!this.images) return undefined;
 		// Shared with the admin client's thumbnail picker — see `canGenerateVariants`.
 		// Offering a srcset for an ineligible asset would point every rung at a URL

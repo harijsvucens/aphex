@@ -9,10 +9,33 @@ import { buildVariantUrl, imageConfigHash } from '../storage/keys';
  * `./generate.ts`, which is server-only.
  */
 
+/**
+ * An external image delivery service, addressed at render time.
+ *
+ * The CMS already owns the *shapes* an image has in a document (a url, a
+ * srcset, dimensions). What it does not own is how those bytes are addressed
+ * for a given provider — a Cloudinary URL is a transformation string plus a
+ * public id, while the built-in pipeline is a width, a config hash and a file
+ * extension. This interface is the seam between the two, so core never has to
+ * learn a vendor's URL grammar.
+ *
+ * Both methods may return null to fall back to the built-in `/media` + Sharp
+ * path for that asset. Returning null is the safe answer when the provider
+ * cannot serve it, and it keeps a misconfigured provider from blanking a page.
+ */
+export interface ImageDeliveryProvider {
+	/** A single URL, used for `src` and for non-responsive consumers. */
+	url(asset: Asset, widths: number[]): string | null;
+	/** Responsive candidates, already formatted as a `srcset` value. */
+	srcset(asset: Asset, widths: number[]): string | null;
+}
+
 /** The resolved image configuration a request is served under. */
 export interface ImageConfig {
 	widths: number[];
 	quality: number;
+	/** External delivery, when the deployment stores images outside the app. */
+	provider?: ImageDeliveryProvider | null;
 }
 
 export const DEFAULT_IMAGE_WIDTHS = [320, 640, 960, 1280, 1920];
@@ -27,7 +50,14 @@ export const DEFAULT_IMAGE_QUALITY = 80;
  * derivative and regenerate the lot.
  */
 export function resolveImageConfig(
-	images: { widths: number[]; quality?: number } | null | undefined
+	images:
+		| {
+				widths: number[];
+				quality?: number;
+				provider?: ImageDeliveryProvider | null;
+		  }
+		| null
+		| undefined
 ): ImageConfig | null {
 	if (images === null) return null;
 
@@ -43,7 +73,8 @@ export function resolveImageConfig(
 		quality:
 			typeof quality === 'number' && quality >= 1 && quality <= 100
 				? Math.round(quality)
-				: DEFAULT_IMAGE_QUALITY
+				: DEFAULT_IMAGE_QUALITY,
+		provider: images?.provider ?? null
 	};
 }
 

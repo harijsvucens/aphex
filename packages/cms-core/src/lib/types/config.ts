@@ -15,6 +15,7 @@ import type { CMSPlugin } from '../plugins/types';
 import type { Auth } from './auth';
 import type { PreviewPerspective } from '../preview/perspective';
 import type { JobHandlerMap } from '../jobs/types';
+import type { ImageDeliveryProvider } from '../images/variants';
 
 export type { GraphQLConfig };
 
@@ -104,6 +105,17 @@ export interface CMSConfig {
 		widths: number[];
 		/** WebP quality, 1–100. Default 80. */
 		quality?: number;
+		/**
+		 * Hand delivery URLs to an external image service instead of the
+		 * `/media` + Sharp pipeline.
+		 *
+		 * Only used for assets that are public and resolvable to a derivative —
+		 * private fields, SVGs and animated sources keep the built-in route,
+		 * because it is the only one that enforces the app's own access rules.
+		 * The adapter owns generation; this only decides which URL a document
+		 * carries.
+		 */
+		provider?: ImageDeliveryProvider | null;
 	} | null;
 
 	/**
