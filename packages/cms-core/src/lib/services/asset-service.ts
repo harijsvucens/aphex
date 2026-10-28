@@ -569,7 +569,14 @@ export class AssetService {
 	private buildSrcsetFor(asset: Asset): string | undefined {
 		const provider = this.providerFor(asset);
 		if (provider && this.images) {
-			const srcset = provider.srcset(asset, usableWidths(this.images, asset.width ?? null));
+			const widths = usableWidths(this.images, asset.width ?? null);
+			// The ladder stops *below* the original width, so a 3376px photo tops
+			// out at 2560 and a 2x display upscales it by a quarter. A provider can
+			// render any width, so the native one is the only rung that is exactly
+			// as sharp as the stored file; offer it when it clears the ladder.
+			const native = asset.width ? Math.round(asset.width) : 0;
+			const candidates = native > (widths[widths.length - 1] ?? 0) ? [...widths, native] : widths;
+			const srcset = provider.srcset(asset, candidates);
 			if (srcset) return srcset;
 		}
 		if (!this.images) return undefined;

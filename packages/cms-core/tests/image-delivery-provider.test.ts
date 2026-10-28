@@ -65,8 +65,22 @@ describe('image delivery provider', () => {
 			[
 				'https://cdn.example/asset-1?w=320 320w',
 				'https://cdn.example/asset-1?w=640 640w',
-				'https://cdn.example/asset-1?w=960 960w'
+				'https://cdn.example/asset-1?w=960 960w',
+				// `src` stays an optimized rung; the srcset gains the native width so
+				// a 2x display is not left asking for 1200 and getting 960.
+				'https://cdn.example/asset-1?w=1200 1200w'
 			].join(', ')
+		);
+	});
+
+	it('offers a small original instead of ladder steps it cannot fill', async () => {
+		const doc = asset({ width: 500 });
+		const result = await injected(doc, service(doc, provider));
+
+		expect(result.srcset).toBe(
+			['https://cdn.example/asset-1?w=320 320w', 'https://cdn.example/asset-1?w=500 500w'].join(
+				', '
+			)
 		);
 	});
 
