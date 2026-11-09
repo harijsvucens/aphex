@@ -86,14 +86,21 @@ interface SrcsetCandidate {
  * hash serves the original rather than failing.
  */
 function parseSrcsetCandidates(srcset: string): SrcsetCandidate[] {
-	return srcset
-		.split(',')
-		.map((part) => part.trim().split(/\s+/))
-		.flatMap(([url, descriptor]) =>
-			url && descriptor?.endsWith('w') ? [{ url, width: Number(descriptor.slice(0, -1)) }] : []
-		)
-		.filter((candidate) => Number.isFinite(candidate.width) && candidate.width > 0)
-		.sort((a, b) => a.width - b.width);
+	const candidates: SrcsetCandidate[] = [];
+
+	// A candidate is "URL descriptor", separated from the next by a comma.
+	// Splitting on every comma is wrong here: a provider URL may itself carry a
+	// comma-separated transform chain (Cloudinary's `f_auto,q_auto,c_limit,w_1280`),
+	// and splitting would turn the last fragment (`w_1280/.../original 1280w`)
+	// into the "URL". Matching URL-then-descriptor keeps the whole URL intact.
+	for (const match of srcset.matchAll(/(\S+)\s+(\d+(?:\.\d+)?)w\b/g)) {
+		const width = Number(match[2]);
+		if (Number.isFinite(width) && width > 0) {
+			candidates.push({ url: match[1]!, width });
+		}
+	}
+
+	return candidates.sort((a, b) => a.width - b.width);
 }
 
 /**
